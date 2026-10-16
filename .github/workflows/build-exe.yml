@@ -1,0 +1,61 @@
+name: Build installer
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      APP_NAME: NotesAPI
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"   # bundled JRE + jpackage
+
+      - name: Download Ow runtime (OwIDE.jar)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --repo OW-Programing-Language/ow-lang --pattern OwIDE.jar --dir runtime
+
+      - name: Install WiX (for .msi)
+        shell: pwsh
+        continue-on-error: true
+        run: choco install wixtoolset --no-progress -y
+
+      - name: Package with jpackage
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force input/game | Out-Null
+          Copy-Item runtime/OwIDE.jar input/
+          Copy-Item src/*.ow input/game/
+          $common = @("--name",$env:APP_NAME,"--app-version","1.0.0","--input","input","--main-jar","OwIDE.jar","--main-class","dev.oreo.GameMain","--vendor","Oreo Studios")
+          $common += @("--win-console")
+          jpackage --type app-image @common --dest out
+          Compress-Archive -Path "out/$($env:APP_NAME)" -DestinationPath "out/$($env:APP_NAME)-win-x64.zip" -Force
+          try { jpackage --type msi @common --win-menu --win-shortcut --win-per-user-install --dest out } catch { Write-Host "msi skipped (WiX unavailable)" }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-windows
+          path: |
+            out/*.zip
+            out/*.msi
+
+      - name: Attach to release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*.zip
+            out/*.msi
